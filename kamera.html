@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Developer Kamera — Demo Aman</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width:900px; margin:20px auto; padding:12px; }
+    header{display:flex;gap:12px;align-items:center}
+    video { width:100%; max-height:480px; background:#000; border-radius:8px; }
+    .controls { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    select, button, input { padding:8px; border-radius:6px; border:1px solid #ccc; background:#fff; }
+    .notice{color:#666;font-size:0.9rem;margin-top:8px}
+    .row{display:flex;gap:8px;align-items:center}
+  </style>
+</head>
+<body>
+  <header>
+    <h1 style="margin:0;font-size:1.2rem">Developer Kamera — Demo Aman</h1>
+  </header>
+
+  <p class="notice">Halaman ini menampilkan & merekam kamera **hanya setelah** pengguna memberi izin. Jangan gunakan untuk melanggar privasi orang lain.</p>
+
+  <div class="row" style="margin-top:8px;">
+    <label for="videoSelect">Pilih Kamera:</label>
+    <select id="videoSelect"></select>
+
+    <label for="resolution">Resolusi:</label>
+    <select id="resolution">
+      <option value="default">Default</option>
+      <option value="qvga">320x240</option>
+      <option value="vga">640x480</option>
+      <option value="hd">1280x720</option>
+      <option value="fullhd">1920x1080</option>
+    </select>
+
+    <label for="audioToggle"><input type="checkbox" id="audioToggle"> Audio</label>
+  </div>
+
+  <video id="video" autoplay playsinline></video>
+
+  <div class="controls">
+    <button id="startBtn">Mulai Kamera</button>
+    <button id="stopBtn" disabled>Berhenti</button>
+    <button id="snapBtn" disabled>Ambil Foto</button>
+    <button id="startRecBtn" disabled>Mulai Rekam</button>
+    <button id="stopRecBtn" disabled>Berhenti Rekam</button>
+    <a id="downloadRecording" style="display:none">Download Rekaman</a>
+    <a id="downloadSnap" style="display:none">Download Foto</a>
+  </div>
+
+  <canvas id="canvas" style="display:none;"></canvas>
+
+  <script>
+    const video = document.getElementById('video');
+    const videoSelect = document.getElementById('videoSelect');
+    const resolutionSelect = document.getElementById('resolution');
+    const audioToggle = document.getElementById('audioToggle');
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const snapBtn = document.getElementById('snapBtn');
+    const startRecBtn = document.getElementById('startRecBtn');
+    const stopRecBtn = document.getElementById('stopRecBtn');
+    const downloadRecording = document.getElementById('downloadRecording');
+    const downloadSnap = document.getElementById('downloadSnap');
+
+    const canvas = document.getElementById('canvas');
+    let stream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+
+    // Ambil daftar perangkat (kamera & mic) — butuh secure context (HTTPS / localhost)
+    async function populateDevices() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+        videoSelect.innerHTML = '';
+        videoDevices.forEach((d) => {
+          const opt = document.createElement('option');
+          opt.value = d.deviceId;
+          opt.text = d.label || `Camera ${videoSelect.length + 1}`;
+          videoSelect.appendChild(opt);
+        });
+        if (!videoDevices.length) {
+          const opt = document.createElement('option');
+          opt.text = 'No camera found';
+          videoSelect.appendChild(opt);
+        }
+      } catch (err) {
+        console.warn('enumerateDevices error', err);
+      }
+    }
+
+    function getConstraints() {
+      const resolution = resolutionSelect.value;
+      let videoConstraints = {};
+      if (resolution === 'qvga') videoConstraints = { width: { exact: 320 }, height: { exact: 240 } };
+      else if (resolution === 'vga') videoConstraints = { width: { exact: 640 }, height: { exact: 480 } };
+      else if (resolution === 'hd') videoConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
+      else if (resolution === 'fullhd') videoConstraints = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+      else videoConstraints = true; // default
+
+      const deviceId = videoSelect.value;
+      if (deviceId) videoConstraints = Object.assign({}, (videoConstraints === true ? {} : videoConstraints), { deviceId: { exact: deviceId } });
+
+      const audio = audioToggle.checked;
+      return { video: videoConstraints, audio: audio };
+    }
+
+    async function startCamera() {
+      stopCamera(); // stop existing first
+      try {
+        const constraints = getConstraints();
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        snapBtn.disabled = false;
+        startRecBtn.disabled = false;
+        await populateDevices(); // update labels (browser provides labels only after permission)
+      } catch (err) {
+        console.error('Gagal mengakses kamera/mikrofon:', err);
+        alert('Tidak dapat mengakses perangkat. Pastikan izin diberikan dan jalankan lewat HTTPS atau localhost.');
+      }
+    }
+
+    function stopCamera() {
+      if (!stream) return;
+      stream.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+      stream = null;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      snapBtn.disabled = true;
+      startRecBtn.disabled = true;
+      stopRecBtn.disabled = true;
+      downloadRecording.style.display = 'none';
+      downloadSnap.style.display = 'none';
+    }
+
+    function takePhoto() {
+      if (!stream) return;
+      const w = video.videoWidth || 640;
+      const h = video.videoHeight || 480;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, w, h);
+      canvas.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        downloadSnap.href = url;
+        downloadSnap.download = 'snapshot.png';
+        downloadSnap.textContent = 'Download Foto';
+        downloadSnap.style.display = 'inline-block';
+      }, 'image/png');
+    }
+
+    function startRecording() {
+      if (!stream) return alert('Camera tidak aktif.');
+      recordedChunks = [];
+      // Pilih jenis mime yang didukung
+      let options = {};
+      if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) options = { mimeType: 'video/webm;codecs=vp9' };
+      else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) options = { mimeType: 'video/webm;codecs=vp8' };
+      else options = { mimeType: 'video/webm' };
+
+      try {
+        mediaRecorder = new MediaRecorder(stream, options);
+      } catch (e) {
+        console.error('MediaRecorder not supported or failed:', e);
+        alert('Perekaman tidak didukung oleh browser ini.');
+        return;
+      }
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(recordedChunks, { type: recordedChunks[0]?.type || 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        downloadRecording.href = url;
+        downloadRecording.download = 'recording.webm';
+        downloadRecording.textContent = 'Download Rekaman';
+        downloadRecording.style.display = 'inline-block';
+      };
+
+      mediaRecorder.start();
+      startRecBtn.disabled = true;
+      stopRecBtn.disabled = false;
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      startRecBtn.disabled = false;
+      stopRecBtn.disabled = true;
+    }
+
+    // Event listeners
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+    snapBtn.addEventListener('click', takePhoto);
+    startRecBtn.addEventListener('click', startRecording);
+    stopRecBtn.addEventListener('click', stopRecording);
+
+    // Jika pemilihan kamera berubah, langsung restart dengan device baru
+    videoSelect.addEventListener('change', () => {
+      if (!startBtn.disabled) return; // kamera belum menyala
+      startCamera();
+    });
+    resolutionSelect.addEventListener('change', () => {
+      if (!startBtn.disabled) startCamera();
+    });
+    audioToggle.addEventListener('change', () => {
+      if (!startBtn.disabled) startCamera();
+    });
+
+    // Saat load, coba populasi (label mungkin kosong sampai izin)
+    populateDevices();
+
+    // Bersihkan saat meninggalkan halaman
+    window.addEventListener('beforeunload', stopCamera);
+  </script>
+</body>
+</html>
